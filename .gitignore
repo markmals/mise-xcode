@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# The Workbench package link: machine-local, recreated by `mise install`.
+.workbench
+
+# mise — machine-local overrides and their lockfiles. mise.toml and mise.lock are committed.
+mise.local.toml
+mise.*.local.toml
+.mise.local.toml
+.mise/locks/mise.local/
+
+# hk — machine-local hook overrides. hk.pkl is committed.
+hk.local.pkl
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*
+
+# Environment: .env.schema is committed; values stay in the process environment or .env.local.
+.env
+.env.*
+!.env.schema
+
+# Logs and temp
+*.log
+*.pid
+*.tmp
