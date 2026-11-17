@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+#MISE description="Run the Lua tests, then exercise the plugin in an isolated Mise without downloading Xcode (needs network; macOS needs an Xcode in /Applications)"
+#MISE alias="t"
+#
+# Runs every tests/*.lua, then links this checkout into a throwaway Mise whose config, data, cache
+# and state directories live in a temporary directory, so it never reads or changes the developer's
+# Mise. It never downloads Xcode, uses an Apple session, runs sudo, accepts a license or changes the
+# Xcode `xcode-select` selects.
+#
+# On macOS it lists Apple's catalogue; checks that locking and installing stop before any request to
+# Apple without a download session, that Apple refuses an invalid one before anything downloads, and
+# that other platforms are refused; then links an installed Xcode, checks the environment
+# `mise exec` selects through mise.toml and through .xcode-version, and removes the link. On Linux
+# it checks that every command refuses the platform.
+set -euo pipefail
+
+# The plugin's name (`PLUGIN.name` in metadata.lua), a release Apple published as one archive for
+# both architectures, and its release candidate.
+tool="xcode"
+version="16.4"
+prerelease="16.4-rc.1"
+# A well-formed Cookie header that Apple rejects, so no download can start.
+invalid_cookie="ADCDownloadAuth=mise-xcode-test-invalid-session"
+
+fail() {
+    echo "FAIL: $*" >&2
+    exit 1
+}
+
+# Runs a command that must fail and report `fragment`.
+refuses() {
+    local fragment="$1"
+    shift
+    if "$@" >"$root/refused.log" 2>&1; then
+        fail "\`$*\` succeeded"
+    fi
+    grep -Fq -- "$fragment" "$root/refused.log" ||
+        fail "\`$*\` did not report \"$fragment\": $(cat "$root/refused.log")"
+}
+
+# Prints one value from a property list.
+plist_value() {
+    /usr/bin/plutil -extract "$2" raw -o - "$1" 2>/dev/null
+}
+
+# Prints a directory's path with every symbolic link resolved.
+physical() {
+    (cd -P "$1" && pwd -P)
+}
+
+# Writes a project whose mise.toml asks for `tool@$2` into the directory $1, and enters it.
+enter_project() {
+    mkdir -p "$1"
+    printf '[tools]\n%s = "%s"\n' "$tool" "$2" >"$1/mise.toml"
+    cd "$1"
+}
+
+# Linux: the plugin refuses the platform before any request, whichever command asks. The session is
+# set so that only the platform can be the reason.
+check_linux() {
+    enter_project "$projects/linux" "$version"
+
+    echo "==> Refuse to list versions on Linux"
+    refuses "not linux-" mise ls-remote --prerelease "$tool"
+
+    echo "==> Refuse to install or lock on Linux"
+    refuses "not linux-" env MISE_XCODE_COOKIE="$invalid_cookie" mise install
+    refuses "not linux-" env MISE_XCODE_COOKIE="$invalid_cookie" mise lock --platform linux-x64,linux-arm64
+    [ ! -e mise.lock ] || fail "a refused lock wrote mise.lock"
+    [ ! -e "$MISE_DATA_DIR/installs/$tool/$version" ] || fail "a refused install left $tool@$version installed"
+}
+
+# Lists versions without a download session: the catalogue is public.
+check_catalogue() {
+    local versions duplicates expected
+    echo "==> List versions from Apple's catalogue"
+    versions="$(mise ls-remote --prerelease "$tool")"
+    for expected in "$version" "$prerelease"; do
+        grep -Fqx "$expected" <<<"$versions" || fail "\`mise ls-remote --prerelease $tool\` does not list $expected"
+    done
+    # Apple publishes some releases once per architecture; each version is listed once.
+    duplicates="$(sort <<<"$versions" | uniq -d)"
+    [ -z "$duplicates" ] || fail "\`mise ls-remote\` lists more than once: $duplicates"
+    printf '%s versions, newest %s\n' "$(grep -c . <<<"$versions")" "$(tail -n 1 <<<"$versions")"
+}
+
+# Locking hashes the archive, so it needs an Apple session just as installing does. Without one, the
+# plugin stops before Mise requests anything from Apple ("set MISE_XCODE_COOKIE" comes before the
+# check that asks Apple); Apple refuses an invalid one before anything downloads. Neither leaves the
+# session in Mise's state.
+check_download_session() {
+    echo "==> Refuse to lock or install without an Apple download session"
+    refuses "set MISE_XCODE_COOKIE" mise lock --platform macos-arm64,macos-x64
+    refuses "set MISE_XCODE_COOKIE" mise install
+
+    echo "==> Refuse to lock or install with an invalid Apple download session"
+    refuses "did not return an XIP archive" env MISE_XCODE_COOKIE="$invalid_cookie" mise lock --platform macos-arm64,macos-x64
+    refuses "did not return an XIP archive" env MISE_XCODE_COOKIE="$invalid_cookie" mise install
+
+    [ ! -e mise.lock ] || fail "a refused lock wrote mise.lock"
+    [ ! -e "$MISE_DATA_DIR/installs/$tool/$version" ] || fail "a refused install left $tool@$version installed"
+    if grep -rqF -- "$invalid_cookie" "$isolated"; then
+        fail "Mise stored the download session under $isolated"
+    fi
+}
+
+# Each pair is a platform `mise lock` takes and the name the plugin's error gives it. The session is
+# set so that only the platform can be the reason.
+check_other_platforms() {
+    local pair
+    for pair in linux-x64=linux-amd64 linux-arm64=linux-arm64 windows-x64=windows-amd64; do
+        echo "==> Refuse to lock ${pair%%=*}"
+        refuses "not ${pair#*=}" env MISE_XCODE_COOKIE="$invalid_cookie" mise lock --platform "${pair%%=*}"
+    done
+    [ ! -e mise.lock ] || fail "a refused lock wrote mise.lock"
+}
+
+# Prints the Xcode to link: the one `xcode-select -p` reports when it is an /Applications/Xcode*.app,
+# whose license is the likeliest to be accepted, or else the first /Applications/Xcode*.app.
+installed_xcode() {
+    local selected app
+    selected="$(xcode-select -p 2>/dev/null || true)"
+    for app in "${selected%/Contents/Developer}" /Applications/Xcode*.app; do
+        case "$app" in
+        /Applications/Xcode*.app) ;;
+        *) continue ;;
+        esac
+        if [ -x "$app/Contents/Developer/usr/bin/xcodebuild" ] &&
+            [ "$(plist_value "$app/Contents/Info.plist" CFBundleIdentifier)" = com.apple.dt.Xcode ]; then
+            echo "$app"
+            return
+        fi
+    done
+    return 1
+}
+
+# Checks what `mise exec` gives a command in the current directory: the linked Xcode's developer
+# directory, its tools first on PATH, and xcodebuild reporting the linked app.
+check_selected() {
+    local developer="$install/Contents/Developer" selected expected
+    selected="$(mise current "$tool")"
+    [ "$selected" = "$xcode_version" ] || fail "\`mise current $tool\` printed \"$selected\""
+
+    selected="$(mise exec -- /bin/sh -c 'printf "%s\n" "$DEVELOPER_DIR" "$XCODE_HOME" "$XCODE_VERSION" "$(command -v xcodebuild)" "$(command -v swift)"')"
+    expected="$(printf '%s\n' "$developer" "$install" "$xcode_version" "$developer/usr/bin/xcodebuild" \
+        "$developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift")"
+    [ "$selected" = "$expected" ] ||
+        fail "\`mise exec\` set DEVELOPER_DIR, XCODE_HOME, XCODE_VERSION, xcodebuild and swift to:
+$selected
+not:
+$expected"
+
+    selected="$(mise exec -- xcodebuild -version)"
+    expected="$(printf 'Xcode %s\nBuild version %s' "$xcode_version" "$xcode_build")"
+    [ "$selected" = "$expected" ] || fail "\`mise exec -- xcodebuild -version\` printed \"$selected\""
+    echo "$selected"
+}
+
+# Links an installed Xcode under the version it reports, selects it both ways, then removes the link
+# and checks that the Xcode it pointed to remains.
+check_linked_xcode() {
+    local app link
+    app="$(installed_xcode)" || fail "no Xcode in /Applications to link; this test never downloads one"
+    xcode_version="$(plist_value "$app/Contents/Info.plist" CFBundleShortVersionString)"
+    xcode_build="$(plist_value "$app/Contents/version.plist" ProductBuildVersion)"
+    # A path with spaces to the installed Xcode, so the link target reaches Mise and the hooks intact.
+    link="$root/External Apps/Xcode $xcode_version.app"
+    mkdir -p "${link%/*}"
+    ln -s "$app" "$link"
+
+    echo "==> Link $app as $tool@$xcode_version"
+    mise link "$tool@$xcode_version" "$link"
+    install="$(mise where "$tool@$xcode_version")"
+    [ -L "$install" ] && [ "$(physical "$install")" = "$(physical "$app")" ] ||
+        fail "\`mise where $tool@$xcode_version\` printed $install, not a link to $app"
+
+    echo "==> Select $tool@$xcode_version with mise.toml"
+    enter_project "$projects/mise toml" "$xcode_version"
+    check_selected
+
+    echo "==> Select $tool@$xcode_version with .xcode-version"
+    mise settings add idiomatic_version_file_enable_tools "$tool"
+    mkdir -p "$projects/xcode version file"
+    cd "$projects/xcode version file"
+    printf '%s\n' "$xcode_version" >.xcode-version
+    check_selected
+
+    echo "==> Uninstall the link and keep the Xcode it points to"
+    mise uninstall "$tool@$xcode_version"
+    [ ! -e "$install" ] && [ ! -L "$install" ] || fail "uninstalling left $install"
+    [ -L "$link" ] && [ -x "$app/Contents/Developer/usr/bin/xcodebuild" ] &&
+        [ "$(plist_value "$app/Contents/Info.plist" CFBundleShortVersionString)" = "$xcode_version" ] ||
+        fail "uninstalling the link changed $app"
+}
+
+plugin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# `mise run test` puts the Lua that mise.toml pins on PATH, so the gate always runs these. The CI
+# smoke jobs install no project tools and skip them; they are the same on every platform.
+echo "==> Lua tests"
+if command -v lua >/dev/null; then
+    for test in "$plugin_dir"/tests/*.lua; do
+        echo "lua tests/${test##*/}"
+        (cd "$plugin_dir" && lua "tests/${test##*/}")
+    done
+else
+    echo "skipped: no lua on PATH; \`mise run test\` provides the one mise.toml pins"
+fi
+
+# Drop every Mise variable except the logging ones, including those `mise run` sets for this task
+# and MISE_XCODE_COOKIE, so none reaches the isolated Mise and no Apple session is used. Drop the
+# variables the plugin sets too, so every one the checks see comes from it.
+for name in $(compgen -e); do
+    case "$name" in
+    MISE_DEBUG | MISE_TRACE | MISE_LOG_LEVEL) ;;
+    MISE_* | __MISE_*) unset "$name" ;;
+    esac
+done
+unset DEVELOPER_DIR XCODE_HOME XCODE_VERSION
+
+root="$(mktemp -d)"
+# `rm -rf` removes the links to an Xcode without following them.
+trap 'rm -rf "$root"' EXIT
+# The spaces check that install paths reach Mise and the hooks intact.
+isolated="$root/isolated mise"
+projects="$isolated/projects"
+export MISE_CONFIG_DIR="$isolated/config"
+export MISE_SYSTEM_CONFIG_DIR="$isolated/system"
+export MISE_GLOBAL_CONFIG_FILE="$isolated/global.toml"
+export MISE_DATA_DIR="$isolated/data"
+export MISE_CACHE_DIR="$isolated/cache"
+export MISE_STATE_DIR="$isolated/state"
+export MISE_TRUSTED_CONFIG_PATHS="$projects"
+export MISE_ENV_CACHE=0
+export MISE_YES=1
+mkdir -p "$projects"
+
+echo "==> Link the plugin as $tool"
+mise plugins link "$tool" "$plugin_dir"
+
+case "$(uname -s)" in
+Darwin)
+    check_catalogue
+    enter_project "$projects/$tool $version" "$version"
+    check_download_session
+    check_other_platforms
+    check_linked_xcode
+    echo "PASS: $tool lists, refuses, links and selects Xcode $xcode_version"
+    ;;
+Linux)
+    check_linux
+    echo "PASS: $tool refuses Linux"
+    ;;
+*)
+    fail "no test for $(uname -s)"
+    ;;
+esac

@@ -1,0 +1,60 @@
+# Knope owns the plugin's version, changelog, and releases. Change files in `.changeset/` are the
+# only source of version bumps: Scoped Commits subjects are not Conventional Commits.
+
+[package]
+# Users install a release by its tag, `v<version>`; `PLUGIN.version` records the same version.
+versioned_files = [
+    { path = "metadata.lua", regex = '(?m)^    version = "(?<version>[^"]+)",$' },
+]
+changelog = "CHANGELOG.md"
+
+[changes]
+ignore_conventional_commits = true
+
+[release_notes]
+change_templates = [
+    "### $summary\n\n$details",
+    "* $summary by @$pr_author_login in #$pr_number",
+    "* $summary",
+]
+
+[github]
+owner = "markmals"
+repo = "mise-xcode"
+
+# `.github/workflows/prepare-release.yml` runs this on every push to `main`: it keeps one release
+# pull request open from the `release` branch, showing the next version and its changelog entry.
+[[workflows]]
+name = "prepare-release"
+
+[[workflows.steps]]
+type = "Command"
+command = "git switch -c release"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+
+[[workflows.steps]]
+type = "Command"
+command = "git commit -m \"release: prepare $version\""
+
+[[workflows.steps]]
+type = "Command"
+command = "git push --force --set-upstream origin release"
+
+[[workflows.steps]]
+type = "CreatePullRequest"
+base = "main"
+
+[workflows.steps.title]
+template = "release: prepare $version"
+
+[workflows.steps.body]
+template = "Merging this pull request releases the xcode plugin $version: it tags `v$version` and publishes the GitHub release with these notes. Users install it with `mise plugins install xcode 'https://github.com/markmals/mise-xcode#v$version'`.\n\n$changelog"
+
+# `.github/workflows/release.yml` runs this when the release pull request merges.
+[[workflows]]
+name = "release"
+
+[[workflows.steps]]
+type = "Release"

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    # `mise run check` is the one definition of the blocking gate, and this job is the only place
+    # it runs automatically: no git hook runs it. Agents wait for this job to pass before marking a
+    # pull request ready or merging it. It runs on macOS, so its test covers Apple silicon,
+    # including linking the runner's Xcode.
+    check:
+        name: Check
+        runs-on: macos-latest
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+            - uses: jdx/mise-action@v5
+            - run: mise run check
+              env:
+                  # Used when Mise installs the pinned development tools.
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # The isolated test where the gate does not run: on Intel macOS, which links that runner's
+    # Xcode, and on Linux, which the plugin must refuse. It needs only Mise, so these jobs skip the
+    # project's tools (hk publishes no macOS x64 build) and with them the Lua tests, which the gate
+    # runs. A clean checkout is the tree a release tags, so this also tests what
+    # `mise plugins install` fetches.
+    smoke:
+        name: Test on ${{ matrix.platform }}
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - platform: macos-x64
+                      os: macos-15-intel
+                    - platform: linux-x64
+                      os: ubuntu-latest
+        runs-on: ${{ matrix.os }}
+        steps:
+            - uses: actions/checkout@v7
+            - uses: jdx/mise-action@v5
+              with:
+                  install: false
+            - run: mise-tasks/test

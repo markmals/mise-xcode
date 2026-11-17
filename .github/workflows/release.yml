@@ -1,0 +1,62 @@
+# Merging Knope's release pull request is the explicit release authorization the process requires.
+# The gate runs again on the merged tree, then `knope release` tags `v<version>` and publishes the
+# GitHub release with the changelog entry as its notes. The plugin is its source tree, so there is
+# nothing to build or publish to a registry: users install the tag, which is the last thing made.
+
+name: Release
+
+on:
+    pull_request:
+        types: [closed]
+        branches: [main]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: release
+    cancel-in-progress: false
+
+jobs:
+    # Merging a release pull request whose checks did not run, or did not pass, must not publish.
+    check:
+        name: Check
+        if: >-
+            github.head_ref == 'release'
+            && github.event.pull_request.merged == true
+            && github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: macos-latest
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+            - uses: jdx/mise-action@v5
+              with:
+                  # A release workflow must not restore a cache: a lower-trust workflow that can
+                  # write to the default branch could otherwise plant files in it.
+                  cache: false
+            - run: mise run check
+              env:
+                  # Used when Mise installs the pinned development tools.
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    release:
+        name: Publish the GitHub release
+        needs: check
+        if: >-
+            github.head_ref == 'release'
+            && github.event.pull_request.merged == true
+            && github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+            - uses: jdx/mise-action@v5
+              with:
+                  cache: false
+            - run: mise exec -- knope release --verbose
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

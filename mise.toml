@@ -1,0 +1,66 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+min_version = "2026.11.9"
+
+[settings]
+lockfile = true
+lockfile_platforms = ["macos-arm64", "macos-x64", "linux-x64", "linux-arm64"]
+
+[tools]
+"github:markmals/workbench" = "3.0.1"
+hk = "2.8.1" # must match hk.pkl's amends/import URLs
+gh = "2.103.2"
+"github:gastownhall/beads" = "1.3.2" # provides `bd`
+actionlint = "1.7.12"
+dprint = "0.64.3"
+worktrunk = "0.81.0" # provides `wt`
+"github:knope-dev/knope" = { version = "0.24.0", version_prefix = "knope/v" }
+"github:dmno-dev/varlock" = "1.25.0"
+stylua = "2.6.0"
+lua-language-server = "3.19.2"
+lua = "5.1.5"
+
+[hooks]
+postinstall = 'ln -sfn "$(mise where github:markmals/workbench)" "{{config_root}}/.workbench"'
+
+# `test` (alias `t`) is the file task mise-tasks/test.
+
+[tasks.setup]
+description = "Bootstrap a checkout: restore or create Beads and install the git hooks"
+run = [
+    "if [ -f .beads/config.yaml ]; then bd bootstrap --yes; else bd init --non-interactive --prefix mise-xcode --skip-agents --skip-hooks; fi",
+    "bd config set export.auto true",
+    "bd config set dolt.auto-push false",
+    "hk install --mise",
+]
+
+[tasks.check]
+alias = "c"
+description = "The whole blocking gate: isolated plugin smoke, Lua tests, linters, and Workbench validation"
+depends = ["test"]
+run = ["hk check --all", "mise run validate"]
+
+[tasks.fmt]
+alias = "f"
+description = "Format the given files, or the whole repository"
+usage = 'arg "[files]" help="Files to format" var=#true'
+run = "hk fix ${usage_files:---all}"
+
+[tasks.status]
+description = "Where the work stands: current phase, next action, who acts, and Beads"
+run = "workbench workflow status --output text"
+
+[tasks.validate]
+description = "Check the project's records and its Workbench setup"
+run = ["workbench records validate --output text", "workbench project validate --output text"]
+
+[tasks."beads:sync"]
+description = "Sync this machine's Beads replica with the project's remote"
+run = "workbench beads sync --output text"
+
+[tasks."beads:claim"]
+description = "Claim a Beads item as this machine and confirm the claim survived a sync: `mise run beads:claim -- <id>`"
+run = "workbench beads claim --output text"
+
+[tasks."beads:close"]
+description = """Close a Beads item as this machine's claimant, then sync: `mise run beads:close -- <id> --reason "<reason>"`"""
+run = "workbench beads close --output text"
