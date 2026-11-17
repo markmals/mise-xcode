@@ -75,3 +75,5 @@ export:
     auto: true
 dolt:
     auto-push: false
+sync:
+    remote: "git+https://github.com/markmals/mise-xcode.git"
