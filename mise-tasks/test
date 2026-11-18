@@ -134,18 +134,22 @@ installed_xcode() {
     return 1
 }
 
-# Checks what `mise exec` gives a command in the current directory: the linked Xcode's developer
-# directory, its tools first on PATH, and xcodebuild reporting the linked app.
+# Check the selected application's identity and native compilation, independent of the host's
+# system-wide Xcode selection.
 check_selected() {
     local developer="$install/Contents/Developer" selected expected
     selected="$(mise current "$tool")"
     [ "$selected" = "$xcode_version" ] || fail "\`mise current $tool\` printed \"$selected\""
 
-    selected="$(mise exec -- /bin/sh -c 'printf "%s\n" "$DEVELOPER_DIR" "$XCODE_HOME" "$XCODE_VERSION" "$(command -v xcodebuild)" "$(command -v swift)"')"
-    expected="$(printf '%s\n' "$developer" "$install" "$xcode_version" "$developer/usr/bin/xcodebuild" \
-        "$developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift")"
+    echo "==> Compile and run C with the selected macOS SDK"
+    mise exec -- cc "$plugin_dir/tests/fixtures/sdk-headers.c" -o "$root/compiler smoke"
+    selected="$("$root/compiler smoke")"
+    [ "$selected" = "C SDK headers and linkage work" ] || fail "the compiled C program printed \"$selected\""
+
+    selected="$(mise exec -- /bin/sh -c 'printf "%s\n" "$DEVELOPER_DIR" "$XCODE_HOME" "$XCODE_VERSION"')"
+    expected="$(printf '%s\n' "$developer" "$install" "$xcode_version")"
     [ "$selected" = "$expected" ] ||
-        fail "\`mise exec\` set DEVELOPER_DIR, XCODE_HOME, XCODE_VERSION, xcodebuild and swift to:
+        fail "\`mise exec\` set DEVELOPER_DIR, XCODE_HOME and XCODE_VERSION to:
 $selected
 not:
 $expected"
@@ -154,6 +158,10 @@ $expected"
     expected="$(printf 'Xcode %s\nBuild version %s' "$xcode_version" "$xcode_build")"
     [ "$selected" = "$expected" ] || fail "\`mise exec -- xcodebuild -version\` printed \"$selected\""
     echo "$selected"
+
+    selected="$(mise exec -- swift --version)"
+    expected="$("$developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift" --version)"
+    [ "$selected" = "$expected" ] || fail "Swift does not report the selected Xcode's toolchain: $selected"
 }
 
 # Links an installed Xcode under the version it reports, selects it both ways, then removes the link
@@ -216,7 +224,7 @@ for name in $(compgen -e); do
     MISE_* | __MISE_*) unset "$name" ;;
     esac
 done
-unset DEVELOPER_DIR XCODE_HOME XCODE_VERSION
+unset DEVELOPER_DIR XCODE_HOME XCODE_VERSION SDKROOT TOOLCHAINS CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
 
 root="$(mktemp -d)"
 # `rm -rf` removes the links to an Xcode without following them.
@@ -234,6 +242,9 @@ export MISE_TRUSTED_CONFIG_PATHS="$projects"
 export MISE_ENV_CACHE=0
 export MISE_YES=1
 mkdir -p "$projects"
+mkdir -p "$isolated/bin"
+ln -s "$(command -v mise)" "$isolated/bin/mise"
+export PATH="$isolated/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 echo "==> Link the plugin as $tool"
 mise plugins link "$tool" "$plugin_dir"

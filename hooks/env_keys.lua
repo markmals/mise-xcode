@@ -8,15 +8,5 @@ function PLUGIN:EnvKeys(ctx)
         { key = "XCODE_HOME", value = app },
         { key = "XCODE_VERSION", value = ctx.version },
         { key = "PATH", value = file.join_path(developer, "usr", "bin") },
-        {
-            key = "PATH",
-            value = file.join_path(
-                developer,
-                "Toolchains",
-                "XcodeDefault.xctoolchain",
-                "usr",
-                "bin"
-            ),
-        },
     }
 end

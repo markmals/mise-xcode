@@ -17,7 +17,7 @@ worktrunk = "0.81.0" # provides `wt`
 "github:dmno-dev/varlock" = "1.25.0"
 stylua = "2.6.0"
 lua-language-server = "3.19.2"
-lua = "5.1.5"
+lua = { version = "5.1.5", os = ["macos"] }
 
 [hooks]
 postinstall = 'ln -sfn "$(mise where github:markmals/workbench)" "{{config_root}}/.workbench"'

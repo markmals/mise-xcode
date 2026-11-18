@@ -30,6 +30,8 @@ mise exec -- xcodebuild -version
 
 The command reports Xcode 16.4. `DEVELOPER_DIR` points into that application while the command runs, independent of the machine-wide `xcode-select` setting. `mise uninstall xcode@16.4` removes the Mise link and leaves the application in `/Applications` intact.
 
+C, C++ and Swift commands use Apple's system dispatchers with `DEVELOPER_DIR` pointing at the selected Xcode. The plugin leaves the raw toolchain directory off `PATH` so native builds discover the SDK normally; no global `SDKROOT` setting is needed.
+
 ## Limits and edge cases
 
 - `mise lock --platform macos-arm64,macos-x64` needs the Apple session. Mise 2026.11.9 downloads each artifact to compute its lockfile SHA-256; locking can transfer several gigabytes per platform. Keep the cookie out of TOML and lockfiles.

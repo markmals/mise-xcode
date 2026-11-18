@@ -32,7 +32,9 @@ mise exec -- xcrun --find swift
 mise lock --platform macos-arm64,macos-x64
 ```
 
-`mise use` writes the project selection. With `mise activate` in your shell, changing projects changes Xcode automatically. `mise exec` uses the selection without shell activation. The plugin sets `DEVELOPER_DIR`, `XCODE_HOME`, `XCODE_VERSION` and Xcode's command/toolchain directories on `PATH`; it never runs `xcode-select` or changes `/Applications`.
+`mise use` writes the project selection. With `mise activate` in your shell, changing projects changes Xcode automatically. `mise exec` uses the selection without shell activation. The plugin sets `DEVELOPER_DIR`, `XCODE_HOME`, `XCODE_VERSION` and Xcode's `Developer/usr/bin` on `PATH`; it never runs `xcode-select` or changes `/Applications`.
+
+The raw `XcodeDefault.xctoolchain/usr/bin` directory stays off `PATH`. Apple’s `/usr/bin/cc`, `clang` and Swift dispatchers honor `DEVELOPER_DIR` and discover the selected SDK, so C and Rust native dependencies build without an `SDKROOT` workaround. An explicit compiler or Swift tool selected by another Mise tool remains that project's override.
 
 Installed applications live at `$(mise where xcode)/Xcode.app`. Open that application once to review Apple's license and complete first-launch setup. The plugin never accepts a license or runs sudo on your behalf. Until setup is complete, Apple tools may report a license or first-launch error.
 
@@ -98,7 +100,7 @@ mise run setup
 mise run check
 ```
 
-`mise run test` runs deterministic Lua boundary tests and isolated Mise smoke checks against the public catalogue. On macOS it also links an existing Xcode and exercises `xcodebuild`, environment selection, version files and unlinking. It never downloads Xcode or touches your Mise state. CI's macOS runners provide Xcode. The smoke checks do not prove authenticated multi-gigabyte downloads or successful signed XIP expansion.
+`mise run test` runs deterministic Lua boundary tests and isolated Mise smoke checks against the public catalogue. On macOS it also links an existing Xcode and exercises `xcodebuild`, Swift selection, a C program that includes SDK headers and links against the system library, version files and unlinking. It never downloads Xcode or touches your Mise state. CI's macOS runners provide Xcode. The smoke checks do not prove authenticated multi-gigabyte downloads or successful signed XIP expansion.
 
 `mise run fmt` formats Lua with StyLua and Markdown, JSON, TOML and YAML with dprint. `mise run check` additionally runs LuaLS, the other hk linters and Workbench validation. `mise run status` reports workflow and Beads state.
 
